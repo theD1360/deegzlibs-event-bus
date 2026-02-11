@@ -36,7 +36,6 @@ class FileResponseStore(ResponseStore):
     def _release_lock(self):
         """Release file-based lock."""
         if self._lock is not None:
-            import fcntl
             try:
                 fcntl.flock(self._lock.fileno(), fcntl.LOCK_UN)
             except (OSError, ValueError):

@@ -13,15 +13,23 @@ from ...interfaces import EventBusAdapter, EventMessage
 class FileQueueAdapter(EventBusAdapter):
     """File-based queue adapter that persists to disk for cross-process access."""
 
-    def __init__(self, queue_name: str = "events", storage_file: Path = None) -> None:
+    def __init__(
+        self, 
+        queue_name: str = "events", 
+        storage_file: Path = None,
+        default_visibility_timeout: int = 60
+    ) -> None:
         """
         Initialize file-based queue adapter.
         
         Args:
             queue_name: Name of the queue
             storage_file: Path to JSON file for storage. Defaults to ~/.qubot/queue.json
+            default_visibility_timeout: Default visibility timeout in seconds (how long a message
+                is hidden after being retrieved). Defaults to 60 seconds.
         """
         self.queue_name = queue_name
+        self.default_visibility_timeout = default_visibility_timeout
         
         if storage_file is None:
             storage_dir = Path.home() / ".qubot"
@@ -93,7 +101,8 @@ class FileQueueAdapter(EventBusAdapter):
                 "id": str(uuid.uuid4()),
                 "message": message_str,
                 "delay_until": time.time() + delay_seconds,
-                "queue_name": self.queue_name
+                "queue_name": self.queue_name,
+                "hidden_until": 0  # Initially visible
             })
 
             self._save_queue(queue)
@@ -106,34 +115,68 @@ class FileQueueAdapter(EventBusAdapter):
             self._acquire_lock()
             queue = self._load_queue()
 
-            # Find and remove the message
-            # Try to get the message string from the QueueMessage wrapper
-            if hasattr(message_instance, 'body'):
-                message_str = message_instance.body
-            elif hasattr(message_instance, '__repr__'):
-                message_str = repr(message_instance)
-            else:
-                message_str = str(message_instance)
+            # Find and remove the message by ID (more reliable than message string)
+            msg_id = None
+            if hasattr(message_instance, '_data') and isinstance(message_instance._data, dict):
+                msg_id = message_instance._data.get("id")  # noqa: SLF001
             
-            queue[:] = [msg for msg in queue if msg.get("message") != message_str]
+            if msg_id:
+                queue[:] = [msg for msg in queue if msg.get("id") != msg_id]
+            else:
+                # Fallback to message string matching
+                message_str = message_instance.body if hasattr(message_instance, 'body') else str(message_instance)
+                queue[:] = [msg for msg in queue if msg.get("message") != message_str]
 
             self._save_queue(queue)
         finally:
             self._release_lock()
 
-    def get_messages(self, *args: Any, **kwargs: Any) -> List[Any]:
-        """Get messages from the queue."""
+    def get_messages(
+        self,
+        max_messages: int = 1,
+        wait_seconds: int = 0,  # noqa: ARG002
+        visibility_timeout: int = None,
+        **kwargs: Any
+    ) -> List[Any]:
+        """
+        Get messages from the queue.
+        
+        Args:
+            max_messages: Maximum number of messages to retrieve
+            wait_seconds: Not used (file-based queue doesn't support blocking)
+            visibility_timeout: How long (in seconds) to hide the message after retrieval.
+                If None, uses the adapter's default_visibility_timeout.
+        """
         try:
             self._acquire_lock()
             queue = self._load_queue()
             current_time = time.time()
+            
+            # Use provided visibility timeout or default
+            vis_timeout = visibility_timeout if visibility_timeout is not None else self.default_visibility_timeout
 
-            # Filter messages for this queue that are ready (delay has passed)
-            ready_messages = [
+            # Filter messages for this queue that are:
+            # 1. For this queue name
+            # 2. Delay has passed (delay_until <= current_time)
+            # 3. Not currently hidden (hidden_until <= current_time)
+            visible_messages = [
                 msg for msg in queue
                 if msg.get("queue_name") == self.queue_name
                 and msg.get("delay_until", 0) <= current_time
+                and msg.get("hidden_until", 0) <= current_time
             ]
+
+            # Limit to max_messages
+            messages_to_return = visible_messages[:max_messages]
+            
+            # Update hidden_until for returned messages (only if visibility_timeout > 0)
+            if vis_timeout > 0:
+                for msg in messages_to_return:
+                    msg["hidden_until"] = current_time + vis_timeout
+                
+                # Save the updated queue with new hidden_until values
+                if messages_to_return:
+                    self._save_queue(queue)
 
             # Return as message objects (the bus will parse them)
             class QueueMessage:
@@ -144,7 +187,7 @@ class FileQueueAdapter(EventBusAdapter):
                 def __repr__(self):
                     return self.body
 
-            return [QueueMessage(msg) for msg in ready_messages]
+            return [QueueMessage(msg) for msg in messages_to_return]
         finally:
             self._release_lock()
 
