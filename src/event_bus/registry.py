@@ -1,6 +1,7 @@
 """Registry for mapping event message types to handlers."""
 
 import inspect
+import sys
 from typing import Any, Callable, List, Optional, Union, get_type_hints
 
 from pydantic import BaseModel, ConfigDict, Field, create_model
@@ -42,6 +43,12 @@ def _event_message_class_from_signature(
     mod = inspect.getmodule(func)
     if mod is not None:
         setattr(mod, name, model)
+        # Also register in sys.modules if module is __main__ to help with cross-process imports
+        # Note: This is a fallback; the recommended approach is to use a shared module
+        if module_name == "__main__" and "__main__" in sys.modules:
+            main_module = sys.modules["__main__"]
+            if not hasattr(main_module, name):
+                setattr(main_module, name, model)
     return model
 
 
