@@ -1,8 +1,8 @@
 """Queue and response adapters for the event bus."""
 
-from .queue import InMemoryEventBusAdapter, SqsEventBusAdapter
+from .queue import FileQueueAdapter, InMemoryEventBusAdapter, SqsEventBusAdapter
 
-__all__ = ["InMemoryEventBusAdapter", "SqsEventBusAdapter"]
+__all__ = ["InMemoryEventBusAdapter", "SqsEventBusAdapter", "FileQueueAdapter"]
 
 try:
     from .queue import RabbitMqEventBusAdapter
@@ -18,9 +18,9 @@ try:
 except ImportError:
     pass
 
-from .response import InMemoryResponseStore
+from .response import FileResponseStore, InMemoryResponseStore
 
-__all__ += ["InMemoryResponseStore"]
+__all__ += ["InMemoryResponseStore", "FileResponseStore"]
 
 try:
     from .response import RedisResponseStore

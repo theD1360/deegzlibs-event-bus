@@ -1,9 +1,10 @@
-"""Queue adapters for the event bus (SQS, RabbitMQ, Redis, in-memory, etc.)."""
+"""Queue adapters for the event bus (SQS, RabbitMQ, Redis, in-memory, file, etc.)."""
 
+from .file import FileQueueAdapter
 from .in_memory import InMemoryEventBusAdapter
 from .sqs import SqsEventBusAdapter
 
-__all__ = ["InMemoryEventBusAdapter", "SqsEventBusAdapter"]
+__all__ = ["InMemoryEventBusAdapter", "SqsEventBusAdapter", "FileQueueAdapter"]
 
 try:
     from .rabbitmq import RabbitMqEventBusAdapter
