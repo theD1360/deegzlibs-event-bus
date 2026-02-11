@@ -10,8 +10,9 @@ from ...interfaces import ResponseStore
 class InMemoryResponseStore(ResponseStore):
     """Simple in-memory response store."""
 
-    def __init__(self) -> None:
+    def __init__(self, default_ttl_seconds: int = 3600) -> None:
         self._store: Dict[str, tuple] = {}  # key -> (value, timestamp)
+        self._default_ttl = default_ttl_seconds
 
     def set(self, key: str, value: Any, ttl_seconds: int = 60) -> None:
         """Store a response value with optional TTL."""
@@ -19,7 +20,7 @@ class InMemoryResponseStore(ResponseStore):
         if not isinstance(value, str):
             value = json.dumps(value)
         # Use default TTL if 0 is provided (matching interface behavior)
-        ttl = ttl_seconds if ttl_seconds > 0 else 3600
+        ttl = ttl_seconds if ttl_seconds > 0 else self._default_ttl
         self._store[key] = (value, time.time() + ttl)
 
     def get(self, key: str) -> Optional[Any]:
