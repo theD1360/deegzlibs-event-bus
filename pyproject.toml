@@ -59,6 +59,7 @@ classifiers = [
 ]
 
 [project.scripts]
+command-bus = "command_bus.cli_main:main"
 command-bus-worker = "command_bus.cli:main"
 
 [project.urls]

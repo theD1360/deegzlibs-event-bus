@@ -81,6 +81,22 @@ class InMemoryPubSubAdapter(QueueAdapter):
                 out.append(_InMemoryPubSubMessage(body=body))
         return out
 
+    def pending_message_count(self) -> int:
+        """Return messages waiting in this subscriber's local buffer."""
+        with _broker_lock:
+            q = _subscriber_queues.get(self._subscriber_id)
+            return len(q) if q is not None else 0
+
+    def purge_messages(self) -> int:
+        """Remove all pending messages from this subscriber's local buffer."""
+        with _broker_lock:
+            q = _subscriber_queues.get(self._subscriber_id)
+            if q is None:
+                return 0
+            count = len(q)
+            q.clear()
+            return count
+
     def close(self) -> None:
         """Unregister this subscriber from the topic."""
         with _broker_lock:
