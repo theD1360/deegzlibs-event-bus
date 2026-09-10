@@ -24,6 +24,9 @@ _DEFAULT_BUS_ATTR = "bus"
 _BUS_TYPES = (CommandBus, EventBus)
 _WORKER_TARGET_TYPES = (CommandBus, EventBus, WorkerApp)
 
+# (target_attr, queue_name or None, worker_index, concurrency)
+WorkerJob = Tuple[str, Optional[str], int, int]
+
 
 def _parse_target(spec: str) -> Tuple[str, str]:
     """
@@ -60,9 +63,9 @@ def _resolve_single_bus(module: object, bus_attr: str) -> Tuple[str, Any]:
     return bus_attr, obj
 
 
-def _worker_jobs(bus_attr: str, workers: int) -> List[Tuple[str, int]]:
-    """One forked process per (bus attribute, worker index)."""
-    return [(bus_attr, w) for w in range(1, workers + 1)]
+def _worker_jobs(bus_attr: str, workers: int, concurrency: int) -> List[WorkerJob]:
+    """One process per worker for a standalone CommandBus or EventBus."""
+    return [(bus_attr, None, w, concurrency) for w in range(1, workers + 1)]
 
 
 def _is_benign_worker_exit(exitcode: Optional[int]) -> bool:
@@ -83,31 +86,41 @@ def _get_multiprocessing_context() -> multiprocessing.context.BaseContext:
     return multiprocessing.get_context("fork")
 
 
-def _queue_name_for_target(target: Union[CommandBus, EventBus, WorkerApp], attr: str) -> str:
+def _queue_name_for_target(
+    target: Union[CommandBus, EventBus, WorkerApp],
+    attr: str,
+    registered_queue: Optional[str] = None,
+) -> str:
     if isinstance(target, WorkerApp):
-        return getattr(target.queue_adapter, "queue_name", attr)
+        if registered_queue is not None:
+            return registered_queue
+        if target.queues:
+            first = next(iter(target.queues.values()))
+            return first.name
+        return attr
     return getattr(target.queue_adapter, "queue_name", attr)
 
 
 async def _do_work(
     target: Union[CommandBus, EventBus, WorkerApp],
     concurrency: int,
+    queue_name: Optional[str] = None,
 ) -> int:
     if isinstance(target, WorkerApp):
-        return await target.work(concurrency=concurrency)
+        return await target.work(concurrency=concurrency, queue_name=queue_name)
     return await target.work(concurrency=concurrency)
 
 
 def _process_worker_main(
     module_name: str,
-    bus_attr: str,
+    target_attr: str,
+    queue_name: Optional[str],
     worker_num: int,
     poll_interval: float,
     log_level: int,
     concurrency: int,
 ) -> None:
     """Entry point for each worker process (import module, run work loop)."""
-    # Foreground process group delivers SIGINT to all workers; parent coordinates shutdown.
     try:
         signal.signal(signal.SIGINT, signal.SIG_IGN)
     except (ValueError, OSError):
@@ -136,19 +149,30 @@ def _process_worker_main(
         wlog.error("Failed to import %r: %s", module_name, e)
         sys.exit(1)
 
-    target = getattr(mod, bus_attr, None)
+    target = getattr(mod, target_attr, None)
     if not isinstance(target, _WORKER_TARGET_TYPES):
         wlog.error(
             "Attribute %r is not a CommandBus, EventBus, or WorkerApp",
-            bus_attr,
+            target_attr,
         )
         sys.exit(1)
 
-    name = f"{bus_attr}:{worker_num}"
-    qn = _queue_name_for_target(target, bus_attr)
+    if isinstance(target, WorkerApp) and queue_name is not None:
+        try:
+            target.get(queue_name)
+        except KeyError:
+            wlog.error(
+                "WorkerApp has no registered queue %r (registered: %s)",
+                queue_name,
+                sorted(target.queues),
+            )
+            sys.exit(1)
+
+    name = f"{target_attr}:{queue_name or 'bus'}:{worker_num}"
+    qn = _queue_name_for_target(target, target_attr, queue_name)
     wlog.info(
         "Worker started for %r (queue_name=%s, concurrency=%d)",
-        bus_attr,
+        name,
         qn,
         concurrency,
     )
@@ -161,7 +185,7 @@ def _process_worker_main(
         try:
             while not stop:
                 try:
-                    await _do_work(target, concurrency)
+                    await _do_work(target, concurrency, queue_name=queue_name)
                 except asyncio.CancelledError:
                     raise
                 except Exception:
@@ -189,7 +213,6 @@ def _supervise_worker_processes(processes: List[multiprocessing.Process]) -> Non
     shutting_down = False
 
     def _request_shutdown(signum: int, frame: Any) -> None:
-        # Keep minimal work here (no join/logging) to avoid deadlocks in the handler.
         nonlocal shutting_down
         shutting_down = True
 
@@ -249,21 +272,32 @@ def _supervise_worker_processes(processes: List[multiprocessing.Process]) -> Non
 
 def _run_worker_processes(
     module_name: str,
-    jobs: List[Tuple[str, int]],
+    jobs: List[WorkerJob],
     poll_interval: float,
     log_level: int,
-    concurrency: int,
 ) -> None:
     ctx = _get_multiprocessing_context()
     method = ctx.get_start_method()
     logger.info("Multiprocessing start method: %s (%d worker process(es))", method, len(jobs))
 
     processes: List[multiprocessing.Process] = []
-    for bus_attr, worker_num in jobs:
+    for target_attr, queue_name, worker_num, job_concurrency in jobs:
+        proc_name = f"command-bus-{target_attr}"
+        if queue_name:
+            proc_name += f"-{queue_name}"
+        proc_name += f"-{worker_num}"
         proc = ctx.Process(
             target=_process_worker_main,
-            args=(module_name, bus_attr, worker_num, poll_interval, log_level, concurrency),
-            name=f"command-bus-{bus_attr}-{worker_num}",
+            args=(
+                module_name,
+                target_attr,
+                queue_name,
+                worker_num,
+                poll_interval,
+                log_level,
+                job_concurrency,
+            ),
+            name=proc_name,
         )
         proc.start()
         processes.append(proc)
@@ -293,12 +327,21 @@ def main(argv: Optional[Sequence[str]] = None) -> None:
         ),
     )
     parser.add_argument(
+        "--queue",
+        metavar="NAME",
+        default=None,
+        help=(
+            "For WorkerApp targets, consume only the registered queue with this name. "
+            "When omitted, all registered queues are spawned."
+        ),
+    )
+    parser.add_argument(
         "--workers",
         type=int,
         default=1,
         metavar="N",
         help=(
-            "Process count for a single CommandBus, EventBus, or WorkerApp. "
+            "Process count for a single CommandBus, EventBus, or WorkerApp queue. "
             "For BusGroup, default count when WorkerConfig.workers is omitted (default: 1)"
         ),
     )
@@ -355,22 +398,62 @@ def main(argv: Optional[Sequence[str]] = None) -> None:
         raise SystemExit(f"Module {module_name!r} has no attribute {attr_name!r}")
 
     if isinstance(obj, WorkerApp):
-        concurrency = args.concurrency if args.concurrency is not None else obj.concurrency
-        if isinstance(obj.queue_adapter, InMemoryQueueAdapter) and args.workers > 1:
-            logger.warning(
-                "InMemoryQueueAdapter is process-local; each of %d worker processes "
-                "will have its own queue. Use a shared backend (SQS, Redis, RabbitMQ) "
-                "for multi-process workers, or run with --workers 1.",
-                args.workers,
+        if args.queue is not None and args.queue not in obj.queues:
+            registered = sorted(obj.queues)
+            raise SystemExit(
+                f"WorkerApp has no registered queue {args.queue!r} "
+                f"(registered: {registered})"
             )
-    elif args.concurrency is not None:
-        concurrency = args.concurrency
-    else:
-        concurrency = 1
+        try:
+            queue_jobs = obj.iter_jobs(
+                args.workers,
+                queue_name=args.queue,
+                workers_override=args.workers if args.queue else None,
+            )
+        except ValueError as e:
+            raise SystemExit(str(e)) from e
+        jobs = [
+            (
+                attr_name,
+                qn,
+                w,
+                obj.concurrency_for_queue(qn, args.concurrency),
+            )
+            for qn, w in queue_jobs
+        ]
 
-    if isinstance(obj, (BusGroup, CommandBusGroup)):
+        for qn, w in queue_jobs:
+            entry = obj.get(qn)
+            n_workers = args.workers if args.queue else (
+                entry.workers if entry.workers is not None else args.workers
+            )
+            per_queue_concurrency = obj.concurrency_for_queue(qn, args.concurrency)
+            adapter = entry.bus.queue_adapter
+            if isinstance(adapter, InMemoryQueueAdapter) and n_workers > 1:
+                logger.warning(
+                    "InMemoryQueueAdapter is process-local; each of %d worker process(es) "
+                    "for queue %r will have its own queue. Use a shared backend "
+                    "(SQS, Redis, RabbitMQ) for multi-process workers, or run with --workers 1.",
+                    n_workers,
+                    qn,
+                )
+            logger.info(
+                "Launching worker %d/%d for %s:%s queue=%r (concurrency=%d)",
+                w,
+                n_workers,
+                module_name,
+                attr_name,
+                qn,
+                per_queue_concurrency,
+            )
+
+    elif isinstance(obj, (BusGroup, CommandBusGroup)):
+        if args.queue is not None:
+            parser.error("--queue is only valid for WorkerApp targets")
         obj.validate(mod)
-        jobs = obj.iter_jobs(mod, args.workers)
+        bus_group_jobs = obj.iter_jobs(mod, args.workers)
+        bus_concurrency = args.concurrency if args.concurrency is not None else 1
+        jobs = [(attr, None, w, bus_concurrency) for attr, w in bus_group_jobs]
         for cfg in obj.configs:
             n = cfg.workers if cfg.workers is not None else args.workers
             bus = cfg.bus
@@ -383,7 +466,10 @@ def main(argv: Optional[Sequence[str]] = None) -> None:
                 qn,
             )
     elif isinstance(obj, _WORKER_TARGET_TYPES):
-        jobs = _worker_jobs(attr_name, args.workers)
+        if args.queue is not None:
+            parser.error("--queue is only valid for WorkerApp targets")
+        bus_concurrency = args.concurrency if args.concurrency is not None else 1
+        jobs = _worker_jobs(attr_name, args.workers, bus_concurrency)
         qn = _queue_name_for_target(obj, attr_name)
         logger.info(
             "Launching %d process(es) for %s:%s (queue_name=%s, concurrency=%d)",
@@ -391,7 +477,7 @@ def main(argv: Optional[Sequence[str]] = None) -> None:
             module_name,
             attr_name,
             qn,
-            concurrency,
+            bus_concurrency,
         )
     else:
         raise SystemExit(
@@ -405,7 +491,6 @@ def main(argv: Optional[Sequence[str]] = None) -> None:
             jobs,
             max(0.0, args.poll_interval),
             log_level,
-            concurrency,
         )
     except KeyboardInterrupt:
         sys.exit(130)

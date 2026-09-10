@@ -32,8 +32,24 @@ The module path must be importable on `PYTHONPATH` (or installed in the active e
 | `myapp.worker:orders_bus` | Import `myapp.worker`, use attribute **`orders_bus`**. |
 | `myapp.worker:bus_group` | Import `myapp.worker`, use attribute **`bus_group`** (must be a `BusGroup`). |
 | `myapp.worker:app` | Import `myapp.worker`, use attribute **`app`** (must be a `WorkerApp`). |
+| `myapp.worker:app --queue orders` | WorkerApp: spawn workers for registered queue **`orders`** only. |
 
 If the attribute is not a **`CommandBus`**, **`EventBus`**, **`WorkerApp`**, or **`BusGroup`**, the CLI exits with an error.
+
+### `WorkerApp` and `--queue`
+
+For **`WorkerApp`** targets with multiple registered buses:
+
+```bash
+# All registered queues (each queue uses its register(..., workers=) count)
+command-bus-worker myapp.worker:app
+
+# One queue only — useful for dedicated deployments
+command-bus-worker myapp.worker:app --queue orders --workers 8
+command-bus-worker myapp.worker:app --queue events
+```
+
+When **`--queue`** is omitted, the CLI spawns every bus registered on the app. When set, only that queue name is consumed. **`--workers`** and **`--concurrency`** override the registered defaults for the spawned job(s).
 
 See [WorkerApp](worker-app.md) for the FastAPI-style facade and in-memory example.
 
