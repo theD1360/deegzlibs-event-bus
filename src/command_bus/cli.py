@@ -10,16 +10,19 @@ import multiprocessing
 import signal
 import sys
 import time
-from typing import Any, List, Optional, Sequence, Tuple
+from typing import Any, List, Optional, Sequence, Tuple, Union
 
+from .adapters.queue.in_memory import InMemoryQueueAdapter
 from .bus import CommandBus
 from .command_bus_group import BusGroup, CommandBusGroup, resolve_bus_attr_on_module
 from .event_bus import EventBus
+from .worker_app import WorkerApp
 
 logger = logging.getLogger(__name__)
 
 _DEFAULT_BUS_ATTR = "bus"
 _BUS_TYPES = (CommandBus, EventBus)
+_WORKER_TARGET_TYPES = (CommandBus, EventBus, WorkerApp)
 
 
 def _parse_target(spec: str) -> Tuple[str, str]:
@@ -80,12 +83,28 @@ def _get_multiprocessing_context() -> multiprocessing.context.BaseContext:
     return multiprocessing.get_context("fork")
 
 
+def _queue_name_for_target(target: Union[CommandBus, EventBus, WorkerApp], attr: str) -> str:
+    if isinstance(target, WorkerApp):
+        return getattr(target.queue_adapter, "queue_name", attr)
+    return getattr(target.queue_adapter, "queue_name", attr)
+
+
+async def _do_work(
+    target: Union[CommandBus, EventBus, WorkerApp],
+    concurrency: int,
+) -> int:
+    if isinstance(target, WorkerApp):
+        return await target.work(concurrency=concurrency)
+    return await target.work(concurrency=concurrency)
+
+
 def _process_worker_main(
     module_name: str,
     bus_attr: str,
     worker_num: int,
     poll_interval: float,
     log_level: int,
+    concurrency: int,
 ) -> None:
     """Entry point for each worker process (import module, run work loop)."""
     # Foreground process group delivers SIGINT to all workers; parent coordinates shutdown.
@@ -117,18 +136,27 @@ def _process_worker_main(
         wlog.error("Failed to import %r: %s", module_name, e)
         sys.exit(1)
 
-    bus = getattr(mod, bus_attr, None)
-    if not isinstance(bus, _BUS_TYPES):
-        wlog.error("Attribute %r is not a CommandBus or EventBus", bus_attr)
+    target = getattr(mod, bus_attr, None)
+    if not isinstance(target, _WORKER_TARGET_TYPES):
+        wlog.error(
+            "Attribute %r is not a CommandBus, EventBus, or WorkerApp",
+            bus_attr,
+        )
         sys.exit(1)
 
     name = f"{bus_attr}:{worker_num}"
-    wlog.info("Worker started for bus %r (queue_name=%s)", bus_attr, getattr(bus.queue_adapter, "queue_name", "?"))
+    qn = _queue_name_for_target(target, bus_attr)
+    wlog.info(
+        "Worker started for %r (queue_name=%s, concurrency=%d)",
+        bus_attr,
+        qn,
+        concurrency,
+    )
 
     async def _loop() -> None:
         while not stop:
             try:
-                await bus.work()
+                await _do_work(target, concurrency)
             except asyncio.CancelledError:
                 raise
             except Exception:
@@ -216,6 +244,7 @@ def _run_worker_processes(
     jobs: List[Tuple[str, int]],
     poll_interval: float,
     log_level: int,
+    concurrency: int,
 ) -> None:
     ctx = _get_multiprocessing_context()
     method = ctx.get_start_method()
@@ -225,7 +254,7 @@ def _run_worker_processes(
     for bus_attr, worker_num in jobs:
         proc = ctx.Process(
             target=_process_worker_main,
-            args=(module_name, bus_attr, worker_num, poll_interval, log_level),
+            args=(module_name, bus_attr, worker_num, poll_interval, log_level, concurrency),
             name=f"command-bus-{bus_attr}-{worker_num}",
         )
         proc.start()
@@ -239,10 +268,11 @@ def main(argv: Optional[Sequence[str]] = None) -> None:
 
     parser = argparse.ArgumentParser(
         description=(
-            "Run CommandBus/EventBus.work() in worker processes "
+            "Run CommandBus/EventBus/WorkerApp.work() in worker processes "
             "(fork on POSIX, spawn on Windows). "
-            "Target is module:attribute like uvicorn — e.g. myapp.worker:bus or "
-            "myapp.worker:command_bus_group. If :attribute is omitted, :bus is assumed."
+            "Target is module:attribute like uvicorn — e.g. myapp.worker:app, "
+            "myapp.worker:bus, or myapp.worker:command_bus_group. "
+            "If :attribute is omitted, :bus is assumed."
         )
     )
     parser.add_argument(
@@ -250,7 +280,7 @@ def main(argv: Optional[Sequence[str]] = None) -> None:
         metavar="TARGET",
         help=(
             "Import path and object: dotted.module:attribute. "
-            "Attribute must be a CommandBus, EventBus, or BusGroup. "
+            "Attribute must be a CommandBus, EventBus, WorkerApp, or BusGroup. "
             "Omit :attribute to use attribute name 'bus' (e.g. myapp.worker is myapp.worker:bus)."
         ),
     )
@@ -260,8 +290,18 @@ def main(argv: Optional[Sequence[str]] = None) -> None:
         default=1,
         metavar="N",
         help=(
-            "Process count for a single CommandBus or EventBus. "
+            "Process count for a single CommandBus, EventBus, or WorkerApp. "
             "For BusGroup, default count when WorkerConfig.workers is omitted (default: 1)"
+        ),
+    )
+    parser.add_argument(
+        "--concurrency",
+        type=int,
+        default=None,
+        metavar="N",
+        help=(
+            "In-process parallel message dispatch per worker process. "
+            "For WorkerApp, defaults to the app's concurrency when omitted (default: 1 otherwise)"
         ),
     )
     parser.add_argument(
@@ -292,6 +332,8 @@ def main(argv: Optional[Sequence[str]] = None) -> None:
 
     if args.workers < 1:
         parser.error("--workers must be >= 1")
+    if args.concurrency is not None and args.concurrency < 1:
+        parser.error("--concurrency must be >= 1")
 
     module_name, attr_name = _parse_target(args.target)
 
@@ -303,6 +345,20 @@ def main(argv: Optional[Sequence[str]] = None) -> None:
     obj = getattr(mod, attr_name, None)
     if obj is None:
         raise SystemExit(f"Module {module_name!r} has no attribute {attr_name!r}")
+
+    if isinstance(obj, WorkerApp):
+        concurrency = args.concurrency if args.concurrency is not None else obj.concurrency
+        if isinstance(obj.queue_adapter, InMemoryQueueAdapter) and args.workers > 1:
+            logger.warning(
+                "InMemoryQueueAdapter is process-local; each of %d worker processes "
+                "will have its own queue. Use a shared backend (SQS, Redis, RabbitMQ) "
+                "for multi-process workers, or run with --workers 1.",
+                args.workers,
+            )
+    elif args.concurrency is not None:
+        concurrency = args.concurrency
+    else:
+        concurrency = 1
 
     if isinstance(obj, (BusGroup, CommandBusGroup)):
         obj.validate(mod)
@@ -318,19 +374,20 @@ def main(argv: Optional[Sequence[str]] = None) -> None:
                 attr,
                 qn,
             )
-    elif isinstance(obj, _BUS_TYPES):
+    elif isinstance(obj, _WORKER_TARGET_TYPES):
         jobs = _worker_jobs(attr_name, args.workers)
-        qn = getattr(obj.queue_adapter, "queue_name", attr_name)
+        qn = _queue_name_for_target(obj, attr_name)
         logger.info(
-            "Launching %d process(es) for %s:%s (queue_name=%s)",
+            "Launching %d process(es) for %s:%s (queue_name=%s, concurrency=%d)",
             args.workers,
             module_name,
             attr_name,
             qn,
+            concurrency,
         )
     else:
         raise SystemExit(
-            f"Attribute {attr_name!r} must be a CommandBus, EventBus, or BusGroup "
+            f"Attribute {attr_name!r} must be a CommandBus, EventBus, WorkerApp, or BusGroup "
             f"(got {type(obj).__name__})"
         )
 
@@ -340,6 +397,7 @@ def main(argv: Optional[Sequence[str]] = None) -> None:
             jobs,
             max(0.0, args.poll_interval),
             log_level,
+            concurrency,
         )
     except KeyboardInterrupt:
         sys.exit(130)

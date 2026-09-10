@@ -2,7 +2,7 @@
 
 The package includes a small **command-line worker** that imports your module, resolves a **`CommandBus`**, **`EventBus`**, or **`BusGroup`**, and runs **`await bus.work()`** in a loop. Each logical worker runs in its **own OS process** so CPU-heavy handlers are not serialized by the CPython GIL.
 
-The first argument is a **target** in the same spirit as **uvicorn** / **gunicorn**: **`dotted.module:attribute`**. The CLI loads that attribute and branches on its type.
+The first argument is a **target** in the same spirit as **uvicorn** / **gunicorn**: **`dotted.module:attribute`**. The CLI loads that attribute and branches on its type (`CommandBus`, `EventBus`, `WorkerApp`, or `BusGroup`).
 
 ## How to run
 
@@ -31,8 +31,11 @@ The module path must be importable on `PYTHONPATH` (or installed in the active e
 | `myapp.worker` | Import `myapp.worker`, use attribute **`bus`** (must be a `CommandBus` or `EventBus`). |
 | `myapp.worker:orders_bus` | Import `myapp.worker`, use attribute **`orders_bus`**. |
 | `myapp.worker:bus_group` | Import `myapp.worker`, use attribute **`bus_group`** (must be a `BusGroup`). |
+| `myapp.worker:app` | Import `myapp.worker`, use attribute **`app`** (must be a `WorkerApp`). |
 
-If the attribute is not a **`CommandBus`**, **`EventBus`**, or **`BusGroup`**, the CLI exits with an error.
+If the attribute is not a **`CommandBus`**, **`EventBus`**, **`WorkerApp`**, or **`BusGroup`**, the CLI exits with an error.
+
+See [WorkerApp](worker-app.md) for the FastAPI-style facade and in-memory example.
 
 ## Worker module layout
 
@@ -105,7 +108,8 @@ If a **`WorkerConfig`** omits **`workers`**, the CLI **`--workers`** value is us
 | Option | Default | Description |
 |--------|---------|-------------|
 | `TARGET` | (required) | `module` or `module:attribute` (see above). |
-| `--workers` | `1` | Process count for one bus, or default per `WorkerConfig` when `workers` is omitted in a `BusGroup`. |
+| `--workers` | `1` | Process count for one bus or `WorkerApp`, or default per `WorkerConfig` when `workers` is omitted in a `BusGroup`. |
+| `--concurrency` | `WorkerApp.concurrency` or `1` | In-process parallel message dispatch per worker process. |
 | `--poll-interval` | `0.05` | Seconds to sleep after each `work()` iteration when polling (reduces CPU when the queue is often empty). Use `0` for no sleep (still yields briefly in the asyncio loop). |
 | `-v` / `--verbose` | off | Once: INFO logging. Twice: DEBUG. |
 
