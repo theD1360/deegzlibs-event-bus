@@ -41,7 +41,7 @@ from .registry import (
     get_qual_name,
 )
 from .middleware import DispatchContext, Middleware
-from .worker_app import WorkerApp
+from .worker_app import RegisteredBus, WorkerApp
 
 __all__ = [
     "Base64MessageCodec",
@@ -77,6 +77,7 @@ __all__ = [
     "RouterEntry",
     "RouterInterface",
     "TransmissibleBaseModel",
+    "RegisteredBus",
     "WorkerConfig",
     "WorkerApp",
     "configure_json_parser",

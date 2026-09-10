@@ -1,6 +1,6 @@
 # WorkerApp
 
-`WorkerApp` is the recommended way to build a command worker. You pass in a **queue adapter** (where commands wait), register handlers with `@app.command()`, and use `execute()` to enqueue and `work()` to dequeue.
+`WorkerApp` is the orchestration shell for worker processes: lifecycle hooks, shared middleware, and CLI targeting. For a **single command queue**, use the constructor shortcut with `@app.command()` and `app.execute()`. For **multiple queues** (commands and events), construct `CommandBus` / `EventBus` yourself and mount them with `app.register()`.
 
 Producer and worker must use the same adapter configuration — see [Client and worker](client-and-worker.md).
 
@@ -32,23 +32,69 @@ Try the demos:
 ```bash
 PYTHONPATH=src python examples/worker_app_demo.py
 PYTHONPATH=src python examples/worker_app_lifecycle_middleware_demo.py
+PYTHONPATH=src python examples/worker_app_multi_queue_demo.py
 ```
+
+## Multi-queue: commands and events
+
+Build buses yourself, register handlers on each bus router, then mount on one app:
+
+```python
+from command_bus import WorkerApp, CommandBus, EventBus, Router
+from command_bus.adapters import InMemoryQueueAdapter, InMemoryPubSubAdapter
+
+orders_router = Router()
+events_router = Router()
+
+@orders_router.command()
+def process_order(order_id: str) -> None:
+    ...
+
+@events_router.event()
+def on_order_created(order_id: str) -> None:
+    ...
+
+orders = CommandBus(
+    queue_adapter=InMemoryQueueAdapter(queue_name="orders"),
+    command_router=orders_router,
+)
+events = EventBus(
+    queue_adapter=InMemoryPubSubAdapter(queue_name="order-events"),
+    command_router=events_router,
+)
+
+app = WorkerApp(create_default_bus=False)
+app.register(orders, name="orders", workers=4, concurrency=2)
+app.register(events, name="events", workers=2, concurrency=4)
+```
+
+- **Send** on the bus: `await orders.execute(...)`, `await events.publish(...)` (not on `app`).
+- **Consume** via CLI or `app.run()` — the app polls registered buses.
+- **Middleware and lifecycle** are app-wide; registered buses share the app's middleware list.
 
 ## Running in production
 
 Point the worker CLI at your app (same idea as `uvicorn myapp.main:app`):
 
 ```bash
-command-bus-worker myapp.worker:app --workers 2 --concurrency 5
+# All registered queues (orders×4 + events×2 processes when configured above)
+command-bus-worker myapp.worker:app
+
+# Dedicated worker for one queue (separate K8s Deployment, same image)
+command-bus-worker myapp.worker:app --queue orders --workers 8
+command-bus-worker myapp.worker:app --queue events
 ```
 
 | Option | Default | What it does |
 |--------|---------|--------------|
-| `--workers` | `1` | Number of worker **processes** sharing the queue. |
+| `--queue` | all registered | Consume only this registered queue name. |
+| `--workers` | `1` or per-queue `workers=` | OS processes for the target queue(s). |
 | `--concurrency` | app's setting, or `1` | How many messages each process handles **at once**. |
 | `--poll-interval` | `0.05` | Pause between polls when the queue is empty. |
 
 Use a shared queue backend (SQS, Redis, RabbitMQ) when `--workers` is greater than 1. The in-memory adapter only works inside a single process.
+
+For multi-queue apps, prefer **`BusGroup`-style per-queue `workers=`** on `register()` instead of one global `--workers` when spawning all queues.
 
 ## Lifecycle hooks
 
@@ -106,19 +152,33 @@ app.add_middleware(LoggingMiddleware, logger=my_logger)
 | `queue_adapter` | in-memory | Where commands are stored. |
 | `queue_name` | `"default"` | Used when no adapter is passed. |
 | `concurrency` | `1` | Max messages processed in parallel per `work()` call. |
-| `response_store` | `None` | Set this to enable `execute(..., wait=True)`. |
+| `response_store` | `None` | Set this to enable `execute(..., wait=True)` on the default bus. |
 | `response_ttl_seconds` | `60` | How long responses are kept. |
+| `create_default_bus` | `True` | Set `False` for register-only multi-queue apps. |
+
+### `app.register(bus, ...)`
+
+Mount an existing `CommandBus` or `EventBus`:
+
+| Parameter | Description |
+|-----------|-------------|
+| `name` | CLI `--queue` target; defaults to `bus.queue_adapter.queue_name`. |
+| `workers` | Default OS process count for this queue (CLI `--workers` overrides with `--queue`). |
+| `concurrency` | In-process parallel dispatch for this queue. |
+
+Returns a `RegisteredBus`. Use `app.get(name)` / `app.queues` to inspect.
 
 ### Methods
 
-- **`@app.command()`** — register a command handler.
+- **`@app.command()`** — register on the default command bus router (single-queue shortcut).
+- **`app.register(bus, ...)`** — mount a command or event bus for CLI/work orchestration.
 - **`@app.on_startup`** / **`@app.on_shutdown`** — lifecycle decorators.
-- **`@app.middleware`** / **`app.add_middleware(...)`** — register dispatch middleware.
+- **`@app.middleware`** / **`app.add_middleware(...)`** — register dispatch middleware (shared by registered buses).
 - **`await app.startup()`** / **`await app.shutdown()`** — run lifecycle handlers manually.
-- **`await app.execute(message, ...)`** — send a command.
-- **`await app.work()`** — poll the queue once; returns how many messages were handled.
+- **`await app.execute(message, ...)`** — send on the default command bus.
+- **`await app.work(queue_name=...)`** — poll once; omit `queue_name` to poll all registered buses.
 - **`await app.run(poll_interval=0.05)`** — startup, poll until cancelled, then shutdown.
-- **`app.bus`** — the underlying `CommandBus` if you need lower-level access.
+- **`app.bus`** — the default `CommandBus` (single-queue shortcut).
 
 ## See also
 

@@ -78,7 +78,7 @@ async def test_worker_app_run_processes_until_idle():
 @pytest.mark.asyncio
 async def test_worker_app_bus_property():
     app = WorkerApp()
-    assert app.bus is app._bus
+    assert app.bus is app.get("default").bus
     assert app.bus.registry is app.router
 
 
