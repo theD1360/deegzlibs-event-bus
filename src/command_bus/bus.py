@@ -151,9 +151,17 @@ class CommandBus(CommandBusInterface):
                 ttl_seconds=self.response_ttl_seconds,
             )
 
-    async def work(self) -> None:
-        """Poll the queue and dispatch each message to its handlers."""
-        messages = self.queue_adapter.get_messages()
-        for message in messages:
-            await self.dispatch(message.body)
-            self.queue_adapter.dequeue(message)
+    async def work(self, *, concurrency: int = 1) -> int:
+        """Poll the queue and dispatch messages to handlers (up to ``concurrency`` in parallel)."""
+        messages = self.queue_adapter.get_messages(max_messages=max(1, concurrency))
+        if not messages:
+            return 0
+
+        async def _handle(message: Any) -> None:
+            try:
+                await self.dispatch(message.body)
+            finally:
+                self.queue_adapter.dequeue(message)
+
+        await asyncio.gather(*(_handle(m) for m in messages))
+        return len(messages)

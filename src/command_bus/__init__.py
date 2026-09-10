@@ -40,6 +40,7 @@ from .registry import (
     RouterEntry,
     get_qual_name,
 )
+from .worker_app import WorkerApp
 
 __all__ = [
     "Base64MessageCodec",
@@ -74,6 +75,7 @@ __all__ = [
     "RouterInterface",
     "TransmissibleBaseModel",
     "WorkerConfig",
+    "WorkerApp",
     "configure_json_parser",
     "resolve_bus_attr_on_module",
     "get_qual_name",

@@ -128,7 +128,7 @@ class CommandBusInterface(ABC):
         pass
 
     @abstractmethod
-    async def work(self) -> None:
+    async def work(self, *, concurrency: int = 1) -> int:
         pass
 
 
@@ -151,5 +151,5 @@ class EventBusInterface(ABC):
         pass
 
     @abstractmethod
-    async def work(self) -> None:
+    async def work(self, *, concurrency: int = 1) -> int:
         pass

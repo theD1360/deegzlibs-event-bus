@@ -56,9 +56,10 @@ def test_cli_command_bus_group_jobs(monkeypatch):
 
     captured: dict = {}
 
-    def capture(module_name, jobs, poll_interval, log_level):
+    def capture(module_name, jobs, poll_interval, log_level, concurrency):
         captured["jobs"] = jobs
         captured["module"] = module_name
+        captured["concurrency"] = concurrency
 
     monkeypatch.setattr(cli, "_run_worker_processes", capture)
     cli.main(["tests.support.cli_group_worker_module:command_bus_group", "--workers", "1"])
@@ -75,8 +76,9 @@ def test_cli_single_bus_default_attr(monkeypatch):
 
     captured: dict = {}
 
-    def capture(module_name, jobs, poll_interval, log_level):
+    def capture(module_name, jobs, poll_interval, log_level, concurrency):
         captured["jobs"] = jobs
+        captured["concurrency"] = concurrency
 
     monkeypatch.setattr(cli, "_run_worker_processes", capture)
     cli.main(["tests.support.cli_worker_module", "--workers", "2"])
@@ -88,8 +90,9 @@ def test_cli_single_bus_explicit_attr(monkeypatch):
 
     captured: dict = {}
 
-    def capture(module_name, jobs, poll_interval, log_level):
+    def capture(module_name, jobs, poll_interval, log_level, concurrency):
         captured["jobs"] = jobs
+        captured["concurrency"] = concurrency
 
     monkeypatch.setattr(cli, "_run_worker_processes", capture)
     cli.main(["tests.support.cli_worker_module:bus", "--workers", "1"])
@@ -105,5 +108,41 @@ def test_cli_target_must_be_bus_or_group(monkeypatch):
 
     monkeypatch.setattr(cli.importlib, "import_module", lambda name: fake)
 
-    with pytest.raises(SystemExit, match="CommandBus, EventBus, or BusGroup"):
+    with pytest.raises(SystemExit, match="CommandBus, EventBus, WorkerApp, or BusGroup"):
         cli.main(["fake.module:thing", "--workers", "1"])
+
+
+def test_cli_worker_app_target(monkeypatch):
+    from command_bus import cli
+
+    captured: dict = {}
+
+    def capture(module_name, jobs, poll_interval, log_level, concurrency):
+        captured["jobs"] = jobs
+        captured["concurrency"] = concurrency
+
+    monkeypatch.setattr(cli, "_run_worker_processes", capture)
+    cli.main(["tests.support.cli_worker_app_module:app", "--workers", "1"])
+    assert captured["jobs"] == [("app", 1)]
+    assert captured["concurrency"] == 2
+
+
+def test_cli_worker_app_concurrency_override(monkeypatch):
+    from command_bus import cli
+
+    captured: dict = {}
+
+    def capture(module_name, jobs, poll_interval, log_level, concurrency):
+        captured["concurrency"] = concurrency
+
+    monkeypatch.setattr(cli, "_run_worker_processes", capture)
+    cli.main(
+        [
+            "tests.support.cli_worker_app_module:app",
+            "--workers",
+            "1",
+            "--concurrency",
+            "5",
+        ]
+    )
+    assert captured["concurrency"] == 5

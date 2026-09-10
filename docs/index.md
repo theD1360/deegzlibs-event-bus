@@ -11,7 +11,8 @@ A small command bus with pluggable queue adapters. Define command messages as Py
 | [Handler decorator](handler-decorator.md) | Use `@router.command()` to generate the message from a function and get a message factory. |
 | [Message formats and parsers](message-formats-and-parsers.md) | Repr, JSON, Base64 parsers and how to set a custom parser on the bus. |
 | [Client and worker](client-and-worker.md) | Shared bus factory, producer client, and consumer worker. |
-| [Worker CLI](cli.md) | `command-bus-worker module[:attr]`: `CommandBus`, `EventBus`, or `BusGroup`. |
+| [WorkerApp](worker-app.md) | FastAPI-style worker facade with `@app.command()` and in-process concurrency. |
+| [Worker CLI](cli.md) | `command-bus-worker module[:attr]`: `CommandBus`, `EventBus`, `WorkerApp`, or `BusGroup`. |
 | [Queue adapters](queue-adapters.md) | In-memory, SQS, RabbitMQ, and Redis adapters. |
 | [Pub/sub events](pubsub-events.md) | `EventBus`, fan-out adapters, `@router.event()`. |
 | [Execute and wait](execute-and-wait.md) | Unified `execute()` API, response store, and request/response. |
