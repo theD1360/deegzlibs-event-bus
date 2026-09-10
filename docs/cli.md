@@ -1,15 +1,24 @@
 # Worker CLI
 
-The package includes a small **command-line worker** that imports your module, resolves a **`CommandBus`**, **`EventBus`**, or **`BusGroup`**, and runs **`await bus.work()`** in a loop. Each logical worker runs in its **own OS process** so CPU-heavy handlers are not serialized by the CPython GIL.
+The package includes CLI tools to **run workers** and **inspect or maintain queues**.
 
-The first argument is a **target** in the same spirit as **uvicorn** / **gunicorn**: **`dotted.module:attribute`**. The CLI loads that attribute and branches on its type (`CommandBus`, `EventBus`, `WorkerApp`, or `BusGroup`).
+| Command | Purpose |
+|---------|---------|
+| `command-bus worker TARGET ...` | Run worker processes (same as `command-bus-worker`) |
+| `command-bus list TARGET` | List queues exposed by the target |
+| `command-bus count TARGET [--queue NAME]` | Show pending message counts |
+| `command-bus drain TARGET [--queue NAME] [-y]` | Remove messages without dispatching handlers |
+| `command-bus purge TARGET [--queue NAME] [-y]` | Clear a queue (native purge when supported) |
 
-## How to run
+The **target** is **`dotted.module:attribute`** (like uvicorn). The attribute must be a **`CommandBus`**, **`EventBus`**, **`WorkerApp`**, or **`BusGroup`**.
 
-After installing the package, use the console script (recommended) or the module entry point:
+## How to run workers
+
+After installing the package, use either entry point:
 
 ```bash
-command-bus-worker myapp.worker:bus --workers 4
+command-bus worker myapp.worker:bus --workers 4
+command-bus-worker myapp.worker:bus --workers 4   # backward-compatible alias
 ```
 
 If the attribute name is **`bus`**, you can omit **`:bus`** (same default as uvicorn’s common `app` pattern, but here the default attribute is **`bus`**):
@@ -129,7 +138,27 @@ If a **`WorkerConfig`** omits **`workers`**, the CLI **`--workers`** value is us
 | `--poll-interval` | `0.05` | Seconds to sleep after each `work()` iteration when polling (reduces CPU when the queue is often empty). Use `0` for no sleep (still yields briefly in the asyncio loop). |
 | `-v` / `--verbose` | off | Once: INFO logging. Twice: DEBUG. |
 
-Run **`command-bus-worker --help`** for the full usage text.
+Run **`command-bus --help`** or **`command-bus-worker --help`** for worker options.
+
+## Queue admin examples
+
+```bash
+# List queues on a WorkerApp (name, kind, adapter, transport queue name, count)
+command-bus list myapp.worker:app
+
+# Count messages on one registered queue
+command-bus count myapp.worker:app --queue orders
+
+# Drain or purge (prompts unless -y)
+command-bus drain myapp.worker:app --queue orders -y
+command-bus purge myapp.worker:app --queue orders -y
+```
+
+**Notes:**
+
+- **Count** is adapter-specific (exact for in-memory/Redis/file; approximate for SQS). Live pub/sub adapters may show `n/a`.
+- **Drain** fetches and deletes messages without running handlers — useful for stuck test queues.
+- **Purge** uses a native clear when the adapter supports it (Redis `DEL`, SQS `PurgeQueue`, etc.).
 
 ## Multiple queues without a group
 

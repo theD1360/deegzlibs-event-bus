@@ -59,6 +59,16 @@ class InMemoryQueueAdapter(QueueAdapter):
             out.append(_InMemoryMessage(body=body))
         return out
 
+    def pending_message_count(self) -> int:
+        """Return the number of messages waiting in this in-process queue."""
+        return len(self._queue)
+
+    def purge_messages(self) -> int:
+        """Remove all pending messages without dispatching."""
+        count = len(self._queue)
+        self._queue.clear()
+        return count
+
 
 class InMemoryCommandBusAdapter(InMemoryQueueAdapter):
     """Deprecated alias for :class:`InMemoryQueueAdapter`."""

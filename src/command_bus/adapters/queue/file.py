@@ -191,3 +191,20 @@ class FileQueueAdapter(QueueAdapter):
         finally:
             self._release_lock()
 
+    def pending_message_count(self) -> int:
+        """Return all messages stored for this queue name (including delayed/hidden)."""
+        queue = self._load_queue()
+        return sum(1 for msg in queue if msg.get("queue_name") == self.queue_name)
+
+    def purge_messages(self) -> int:
+        """Remove all messages for this queue name from the storage file."""
+        try:
+            self._acquire_lock()
+            queue = self._load_queue()
+            kept = [msg for msg in queue if msg.get("queue_name") != self.queue_name]
+            removed = len(queue) - len(kept)
+            self._save_queue(kept)
+            return removed
+        finally:
+            self._release_lock()
+

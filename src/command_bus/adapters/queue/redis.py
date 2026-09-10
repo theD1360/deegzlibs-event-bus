@@ -67,6 +67,17 @@ class RedisQueueAdapter(QueueAdapter):
             out.append(_RedisMessage(body=body))
         return out
 
+    def pending_message_count(self) -> int:
+        """Return the number of messages waiting in the Redis list."""
+        return int(self._redis.llen(self.queue_name))
+
+    def purge_messages(self) -> int:
+        """Delete the Redis list key and return how many messages were removed."""
+        count = self.pending_message_count()
+        if count:
+            self._redis.delete(self.queue_name)
+        return count
+
 
 class RedisCommandBusAdapter(RedisQueueAdapter):
     """Deprecated alias for :class:`RedisQueueAdapter`."""
