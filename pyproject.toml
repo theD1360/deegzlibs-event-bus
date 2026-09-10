@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [tool.poetry]
 name = "deegzlibs-command-bus"
-version = "2.2.0"
+version = "2.3.0"
 description = "A small command bus with pluggable queue adapters (e.g. AWS SQS)"
 readme = "README.md"
 authors = ["Diego Alejos <lego.admin@gmail.com>"]
@@ -33,7 +33,7 @@ redis = ["redis"]
 
 [project]
 name = "deegzlibs-command-bus"
-version = "2.2.0"
+version = "2.3.0"
 description = "A small command bus with pluggable queue adapters and response stores (e.g. SQS, RabbitMQ, Redis, etc.)"
 readme = "README.md"
 requires-python = ">=3.8"
@@ -80,7 +80,7 @@ where = ["src"]
 
 [tool.commitizen]
 name = "cz_conventional_commits"
-version = "2.2.0"
+version = "2.3.0"
 tag_format = "v$version"
 version_files = [
     "pyproject.toml:version",
