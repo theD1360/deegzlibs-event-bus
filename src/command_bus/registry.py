@@ -1,5 +1,7 @@
 """Router for mapping message types to handlers."""
 
+from __future__ import annotations
+
 import inspect
 import sys
 import warnings

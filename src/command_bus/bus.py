@@ -4,9 +4,10 @@ import asyncio
 import logging
 import time
 import uuid
-from typing import Any, Optional, Type
+from typing import Any, MutableSequence, Optional, Type
 
 from .interfaces import QueueAdapter, CommandBusInterface, CommandMessage, ResponseStore
+from .middleware import DispatchContext, Middleware, run_middleware_stack
 from .parsers import MessageParserBase, ReprMessageParser
 from .registry import Router
 
@@ -34,6 +35,8 @@ class CommandBus(CommandBusInterface):
         message_parser_class: Optional[Type[MessageParserBase]] = None,
         response_store: Optional[ResponseStore] = None,
         response_ttl_seconds: int = 60,
+        middleware: Optional[MutableSequence[Middleware]] = None,
+        dispatch_context_app: Any = None,
     ) -> None:
         self.queue_adapter = queue_adapter
         self.registry = (
@@ -42,6 +45,8 @@ class CommandBus(CommandBusInterface):
         self.message_parser_class = message_parser_class or ReprMessageParser
         self.response_store = response_store
         self.response_ttl_seconds = response_ttl_seconds
+        self._middleware = middleware if middleware is not None else []
+        self.dispatch_context_app = dispatch_context_app
 
     def _enqueue(
         self,
@@ -121,10 +126,8 @@ class CommandBus(CommandBusInterface):
             response_ttl_seconds=response_ttl_seconds,
         )
 
-    async def dispatch(self, raw_message: str) -> None:
-        """Parse the raw message (using the configured parser), then run all registered handlers."""
-        parser = self.message_parser_class(raw_message)
-        command_instance = parser.initialize()
+    async def _dispatch_parsed(self, command_instance: CommandMessage) -> None:
+        """Run registered handlers for a parsed command and store response if configured."""
         registry_entries = self.registry.get_handlers_for_message(command_instance)
         logger.info("%d handlers found", len(registry_entries))
 
@@ -150,6 +153,23 @@ class CommandBus(CommandBusInterface):
                 last_result,
                 ttl_seconds=self.response_ttl_seconds,
             )
+
+    async def dispatch(self, raw_message: str) -> None:
+        """Parse the raw message (using the configured parser), then run all registered handlers."""
+        ctx = DispatchContext(
+            raw_message=raw_message,
+            app=self.dispatch_context_app,
+        )
+
+        async def core(current_ctx: DispatchContext) -> None:
+            parser = self.message_parser_class(current_ctx.raw_message)
+            current_ctx.parsed_message = parser.initialize()
+            await self._dispatch_parsed(current_ctx.parsed_message)
+
+        if self._middleware:
+            await run_middleware_stack(ctx, core, self._middleware)
+        else:
+            await core(ctx)
 
     async def work(self, *, concurrency: int = 1) -> int:
         """Poll the queue and dispatch messages to handlers (up to ``concurrency`` in parallel)."""

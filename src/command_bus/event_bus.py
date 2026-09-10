@@ -2,13 +2,14 @@
 
 import asyncio
 import logging
-from typing import Any, Optional, Type
+from typing import Any, MutableSequence, Optional, Type
 
 from .interfaces import (
     EventBusInterface,
     EventMessage,
     QueueAdapter,
 )
+from .middleware import DispatchContext, Middleware, run_middleware_stack
 from .parsers import MessageParserBase, ReprMessageParser
 from .registry import Router
 
@@ -29,12 +30,16 @@ class EventBus(EventBusInterface):
         queue_adapter: QueueAdapter,
         command_router: Optional[Router] = None,
         message_parser_class: Optional[Type[MessageParserBase]] = None,
+        middleware: Optional[MutableSequence[Middleware]] = None,
+        dispatch_context_app: Any = None,
     ) -> None:
         self.queue_adapter = queue_adapter
         self.registry = (
             command_router if command_router is not None else Router()
         )
         self.message_parser_class = message_parser_class or ReprMessageParser
+        self._middleware = middleware if middleware is not None else []
+        self.dispatch_context_app = dispatch_context_app
         if hasattr(queue_adapter, "bind_message_parser"):
             queue_adapter.bind_message_parser(self.message_parser_class)
 
@@ -47,10 +52,8 @@ class EventBus(EventBusInterface):
         delay = 0 if delay_seconds is None else delay_seconds
         self.queue_adapter.enqueue(message_instance, delay_seconds=delay)
 
-    async def dispatch(self, raw_message: str) -> None:
-        """Parse the raw message and run all registered handlers (no-op if none)."""
-        parser = self.message_parser_class(raw_message)
-        event_instance = parser.initialize()
+    async def _dispatch_parsed(self, event_instance: EventMessage) -> None:
+        """Run registered handlers for a parsed event (no-op if none)."""
         registry_entries = self.registry.get_handlers_for_message(event_instance)
         logger.info("%d handlers found", len(registry_entries))
 
@@ -66,6 +69,23 @@ class EventBus(EventBusInterface):
                 event_instance,
                 entry.handler_class,
             )
+
+    async def dispatch(self, raw_message: str) -> None:
+        """Parse the raw message and run all registered handlers (no-op if none)."""
+        ctx = DispatchContext(
+            raw_message=raw_message,
+            app=self.dispatch_context_app,
+        )
+
+        async def core(current_ctx: DispatchContext) -> None:
+            parser = self.message_parser_class(current_ctx.raw_message)
+            current_ctx.parsed_message = parser.initialize()
+            await self._dispatch_parsed(current_ctx.parsed_message)
+
+        if self._middleware:
+            await run_middleware_stack(ctx, core, self._middleware)
+        else:
+            await core(ctx)
 
     async def work(self, *, concurrency: int = 1) -> int:
         """Poll the subscription and dispatch messages (up to ``concurrency`` in parallel)."""

@@ -40,6 +40,7 @@ from .registry import (
     RouterEntry,
     get_qual_name,
 )
+from .middleware import DispatchContext, Middleware
 from .worker_app import WorkerApp
 
 __all__ = [
@@ -56,6 +57,7 @@ __all__ = [
     "CommandBusRouterInterface",
     "CommandHandler",
     "CommandMessage",
+    "DispatchContext",
     "EventBus",
     "EventBusInterface",
     "EventMessage",
@@ -67,6 +69,7 @@ __all__ = [
     "MessageParser",
     "MessageParserBase",
     "MessageAttributes",
+    "Middleware",
     "QueueAdapter",
     "ReprMessageParser",
     "ResponseStore",

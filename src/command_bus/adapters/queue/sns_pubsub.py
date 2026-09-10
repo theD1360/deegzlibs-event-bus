@@ -1,5 +1,7 @@
 """SNS fan-out adapter with SQS subscription for EventBus workers."""
 
+from __future__ import annotations
+
 import json
 from typing import Any, List, Optional, Type
 

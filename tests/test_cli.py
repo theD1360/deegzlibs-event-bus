@@ -146,3 +146,29 @@ def test_cli_worker_app_concurrency_override(monkeypatch):
         ]
     )
     assert captured["concurrency"] == 5
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="SIGTERM worker stop is POSIX-specific")
+def test_cli_worker_app_lifecycle(monkeypatch):
+    import logging
+    import os
+    import signal
+
+    from command_bus import cli
+    from tests.support import cli_worker_app_lifecycle_module as lifecycle_mod
+
+    lifecycle_mod.lifecycle_log.clear()
+
+    async def stop_after_one_work(target, concurrency):
+        os.kill(os.getpid(), signal.SIGTERM)
+
+    monkeypatch.setattr(cli, "_do_work", stop_after_one_work)
+    cli._process_worker_main(
+        "tests.support.cli_worker_app_lifecycle_module",
+        "app",
+        1,
+        0.0,
+        logging.WARNING,
+        1,
+    )
+    assert lifecycle_mod.lifecycle_log == ["startup", "shutdown"]

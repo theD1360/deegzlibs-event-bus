@@ -12,7 +12,7 @@ license = "MIT"
 packages = [{include = "command_bus", from = "src"}]
 
 [tool.poetry.dependencies]
-python = "^3.8"
+python = "^3.9"
 pydantic = ">=2.0"
 boto3 = {version = "*", optional = true}
 pika = {version = ">=1.0", optional = true}
@@ -36,7 +36,7 @@ name = "deegzlibs-command-bus"
 version = "2.3.0"
 description = "A small command bus with pluggable queue adapters and response stores (e.g. SQS, RabbitMQ, Redis, etc.)"
 readme = "README.md"
-requires-python = ">=3.8"
+requires-python = ">=3.9"
 license = {text = "MIT"}
 authors = [
     {name = "Diego Alejos", email = "lego.admin@gmail.com"}
@@ -50,7 +50,6 @@ classifiers = [
     "Intended Audience :: Developers",
     "Operating System :: OS Independent",
     "Programming Language :: Python :: 3",
-    "Programming Language :: Python :: 3.8",
     "Programming Language :: Python :: 3.9",
     "Programming Language :: Python :: 3.10",
     "Programming Language :: Python :: 3.11",
