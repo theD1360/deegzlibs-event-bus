@@ -1,27 +1,19 @@
 # WorkerApp
 
-`WorkerApp` is a FastAPI-style entry point for command workers: one object owns the router, queue adapter, and bus. Register handlers with `@app.command()` and run the worker with `app.run()` or the [Worker CLI](cli.md).
+`WorkerApp` is the recommended way to build a command worker. You pass in a **queue adapter** (where commands wait), register handlers with `@app.command()`, and use `execute()` to enqueue and `work()` to dequeue.
 
-## Motivation
-
-Like FastAPI + Uvicorn/Gunicorn, worker throughput comes from two layers:
-
-| Layer | FastAPI | WorkerApp |
-|-------|---------|-----------|
-| OS processes | `gunicorn -w 4` | `command-bus-worker ... --workers 4` |
-| In-process concurrency | asyncio (many connections per process) | `concurrency` / `--concurrency` (many messages per poll) |
+Producer and worker must use the same adapter configuration — see [Client and worker](client-and-worker.md).
 
 ## Quick start (in-memory)
 
-Single-process demo — producer and consumer share one queue:
+Good for local development and tests. Producer and consumer share one queue in the same process:
 
 ```python
 from command_bus import WorkerApp
 from command_bus.adapters import InMemoryQueueAdapter, InMemoryResponseStore
 
-adapter = InMemoryQueueAdapter(queue_name="demo")
 app = WorkerApp(
-    queue_adapter=adapter,
+    queue_adapter=InMemoryQueueAdapter(queue_name="demo"),
     concurrency=3,
     response_store=InMemoryResponseStore(),
 )
@@ -35,29 +27,27 @@ def greet(name: str) -> str:
     return f"Hello, {name}!"
 ```
 
-Run the included example:
+Try the full demo:
 
 ```bash
 PYTHONPATH=src python examples/worker_app_demo.py
 ```
 
-## CLI
+## Running in production
 
-Point the worker CLI at your `WorkerApp` instance (like uvicorn):
+Point the worker CLI at your app (same idea as `uvicorn myapp.main:app`):
 
 ```bash
 command-bus-worker myapp.worker:app --workers 2 --concurrency 5
 ```
 
-| Option | Default | Description |
-|--------|---------|-------------|
-| `--workers` | `1` | OS process count (competing consumers on shared queues). |
-| `--concurrency` | app's `concurrency` (or `1` for `CommandBus`) | Parallel message dispatch per process. |
-| `--poll-interval` | `0.05` | Idle sleep between poll ticks. |
+| Option | Default | What it does |
+|--------|---------|--------------|
+| `--workers` | `1` | Number of worker **processes** sharing the queue. |
+| `--concurrency` | app's setting, or `1` | How many messages each process handles **at once**. |
+| `--poll-interval` | `0.05` | Pause between polls when the queue is empty. |
 
-## In-memory vs production adapters
-
-`InMemoryQueueAdapter` stores messages in a **process-local** deque. It works well for tests and single-process demos. Do **not** use `--workers > 1` with in-memory queues — each process gets its own empty queue. For multi-process workers, use SQS, Redis, or RabbitMQ ([queue adapters](queue-adapters.md)).
+Use a shared queue backend (SQS, Redis, RabbitMQ) when `--workers` is greater than 1. The in-memory adapter only works inside a single process.
 
 ## API
 
@@ -65,22 +55,23 @@ command-bus-worker myapp.worker:app --workers 2 --concurrency 5
 
 | Parameter | Default | Description |
 |-----------|---------|-------------|
-| `queue_adapter` | `InMemoryQueueAdapter(queue_name=...)` | Queue backend. |
+| `queue_adapter` | in-memory | Where commands are stored. |
 | `queue_name` | `"default"` | Used when no adapter is passed. |
-| `concurrency` | `1` | Max messages fetched and dispatched in parallel per `work()` call. |
-| `response_store` | `None` | Enables `execute(..., wait=True)`. |
-| `response_ttl_seconds` | `60` | TTL for stored responses. |
+| `concurrency` | `1` | Max messages processed in parallel per `work()` call. |
+| `response_store` | `None` | Set this to enable `execute(..., wait=True)`. |
+| `response_ttl_seconds` | `60` | How long responses are kept. |
 
 ### Methods
 
-- **`@app.command()`** — register a command handler (same as `@router.command()`).
-- **`await app.execute(message, ...)`** — enqueue a command.
-- **`await app.work()`** — poll once; returns number of messages handled.
-- **`await app.run(poll_interval=0.05)`** — dev loop until cancelled.
-- **`app.bus`** — underlying `CommandBus` for advanced use.
+- **`@app.command()`** — register a command handler.
+- **`await app.execute(message, ...)`** — send a command.
+- **`await app.work()`** — poll the queue once; returns how many messages were handled.
+- **`await app.run(poll_interval=0.05)`** — keep polling until cancelled (handy in dev).
+- **`app.bus`** — the underlying `CommandBus` if you need lower-level access.
 
 ## See also
 
-- [Handler decorator](handler-decorator.md) — `@router.command()` behaviour.
-- [Worker CLI](cli.md) — process model and options.
-- [Client and worker](client-and-worker.md) — shared factory pattern for production.
+- [Quick start](quickstart.md) — first steps with WorkerApp.
+- [Handler decorator](handler-decorator.md) — how `@app.command()` works.
+- [Worker CLI](cli.md) — process model and all CLI options.
+- [Client and worker](client-and-worker.md) — splitting producer and consumer in production.
