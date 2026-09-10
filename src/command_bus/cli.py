@@ -154,21 +154,29 @@ def _process_worker_main(
     )
 
     async def _loop() -> None:
-        while not stop:
-            try:
-                await _do_work(target, concurrency)
-            except asyncio.CancelledError:
-                raise
-            except Exception:
-                wlog.exception("%s: work() failed", name)
-            if stop:
-                break
-            if poll_interval > 0:
-                deadline = time.monotonic() + poll_interval
-                while time.monotonic() < deadline and not stop:
-                    await asyncio.sleep(min(0.05, max(0.0, deadline - time.monotonic())))
-            else:
-                await asyncio.sleep(0)
+        lifecycle_started = False
+        if isinstance(target, WorkerApp):
+            await target.startup()
+            lifecycle_started = True
+        try:
+            while not stop:
+                try:
+                    await _do_work(target, concurrency)
+                except asyncio.CancelledError:
+                    raise
+                except Exception:
+                    wlog.exception("%s: work() failed", name)
+                if stop:
+                    break
+                if poll_interval > 0:
+                    deadline = time.monotonic() + poll_interval
+                    while time.monotonic() < deadline and not stop:
+                        await asyncio.sleep(min(0.05, max(0.0, deadline - time.monotonic())))
+                else:
+                    await asyncio.sleep(0)
+        finally:
+            if isinstance(target, WorkerApp) and lifecycle_started:
+                await target.shutdown()
 
     try:
         asyncio.run(_loop())

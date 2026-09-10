@@ -85,3 +85,81 @@ async def test_worker_app_bus_property():
 def test_worker_app_invalid_concurrency():
     with pytest.raises(ValueError, match="concurrency must be >= 1"):
         WorkerApp(concurrency=0)
+
+
+@pytest.mark.asyncio
+async def test_worker_app_lifecycle_startup_shutdown():
+    events: list[str] = []
+    app = WorkerApp()
+
+    @app.on_startup
+    async def start():
+        events.append("startup")
+
+    @app.on_shutdown
+    def stop():
+        events.append("shutdown")
+
+    await app.startup()
+    await app.shutdown()
+    assert events == ["startup", "shutdown"]
+
+
+@pytest.mark.asyncio
+async def test_worker_app_run_calls_lifecycle():
+    events: list[str] = []
+    app = WorkerApp()
+
+    @app.on_startup
+    def start():
+        events.append("startup")
+
+    @app.on_shutdown
+    def stop():
+        events.append("shutdown")
+
+    worker = asyncio.create_task(app.run(poll_interval=0.01))
+    await asyncio.sleep(0.02)
+    worker.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await worker
+    assert events == ["startup", "shutdown"]
+
+
+@pytest.mark.asyncio
+async def test_worker_app_middleware():
+    order: list[str] = []
+    app = WorkerApp()
+
+    @app.middleware
+    async def log_mw(ctx, call_next):
+        order.append("mw")
+        await call_next(ctx)
+
+    @app.command()
+    def handle(tag: str) -> None:
+        order.append("handler")
+
+    await app.execute(handle(tag="a"), wait=False)
+    await app.work()
+    assert order == ["mw", "handler"]
+
+
+@pytest.mark.asyncio
+async def test_worker_app_dispatch_context_has_app():
+    seen_app = []
+
+    app = WorkerApp()
+
+    @app.middleware
+    async def capture_app(ctx, call_next):
+        seen_app.append(ctx.app)
+        await call_next(ctx)
+
+    @app.command()
+    def handle(tag: str) -> None:
+        pass
+
+    await app.execute(handle(tag="a"), wait=False)
+    await app.work()
+    assert seen_app == [app]

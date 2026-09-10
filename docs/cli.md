@@ -133,6 +133,8 @@ command-bus-worker myapp.worker:priority_bus --workers 2 &
 
 The parent handles **SIGINT** / **SIGTERM** and stops children with **`terminate()`** (SIGTERM on Unix). Child workers ignore **SIGINT** so the terminal does not deliver the same signal to every process in the foreground group in a conflicting way; they shut down on **SIGTERM** from the parent.
 
+For **`WorkerApp`** targets, each child process runs **`@app.on_startup`** handlers before the first **`work()`** poll and **`@app.on_shutdown`** handlers when the loop exits. See [WorkerApp](worker-app.md#lifecycle-hooks).
+
 ## See also
 
 - [Client and worker](client-and-worker.md) — shared bus factory pattern and hand-written `asyncio` worker loops.
